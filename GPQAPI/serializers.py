@@ -2,7 +2,7 @@ from rest_framework import serializers
 from .models import (
     UsuarioPersonalizado, Rol, PerfilUsuario,
     RegistroFirma, TipoProducto, Producto,
-    MateriaPrima, ControlCalidad,
+    MateriaPrima, MaterialEnvasePrimario, ControlCalidad,
     PlanillaFabricacion, PlanillaEnvase,
     PlanillaEnvasePrimario, Jarabe
 )
@@ -15,8 +15,6 @@ class UsuarioPersonalizadoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = UsuarioPersonalizado
-
-        # 🔥 Campos que NO deben verse nunca en DRF
         exclude = (
             "groups",
             "user_permissions",
@@ -25,9 +23,7 @@ class UsuarioPersonalizadoSerializer(serializers.ModelSerializer):
             "ultimo_acceso",
             "fecha_creacion",
         )
-
         extra_kwargs = {
-            # se puede enviar, no se muestra nunca
             "password": {"write_only": True},
             "is_superuser": {"write_only": True},
             "is_staff": {"write_only": True},
@@ -75,7 +71,7 @@ class PerfilUsuarioSerializer(serializers.ModelSerializer):
 
 
 # =====================================================
-# FIRMA (tipo_firma oculto)
+# FIRMA
 # =====================================================
 class RegistroFirmaSerializer(serializers.ModelSerializer):
     usuario_nombre = serializers.CharField(
@@ -87,7 +83,6 @@ class RegistroFirmaSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = RegistroFirma
-        # 🔥 tipo_firma desaparece del API
         exclude = ("tipo_firma",)
         read_only_fields = (
             "timestamp_firma",
@@ -98,7 +93,6 @@ class RegistroFirmaSerializer(serializers.ModelSerializer):
         )
 
 
-# Para endpoints de /firmar: sin tipo_firma
 class FirmaSerializer(serializers.Serializer):
     rut = serializers.CharField()
     password = serializers.CharField(style={"input_type": "password"})
@@ -118,11 +112,48 @@ class ProductoSerializer(serializers.ModelSerializer):
         model = Producto
         fields = "__all__"
 
+    def validate(self, attrs):
+        fecha_emision = attrs.get(
+            "fecha_emision",
+            getattr(self.instance, "fecha_emision",
+                    None) if self.instance else None,
+        )
+        fecha_vencimiento = attrs.get(
+            "fecha_vencimiento",
+            getattr(self.instance, "fecha_vencimiento",
+                    None) if self.instance else None,
+        )
+        if (
+            fecha_emision
+            and fecha_vencimiento
+            and fecha_vencimiento < fecha_emision
+        ):
+            raise serializers.ValidationError({
+                "fecha_vencimiento": "La fecha de vencimiento no puede ser anterior a la fecha de emisión."
+            })
+        return attrs
+
 
 class MateriaPrimaSerializer(serializers.ModelSerializer):
+    firma_inspector_calidad_info = RegistroFirmaSerializer(
+        source="firma_inspector_calidad", read_only=True
+    )
+
     class Meta:
         model = MateriaPrima
         fields = "__all__"
+        read_only_fields = ("estado_aprobacion",)
+
+
+class MaterialEnvasePrimarioSerializer(serializers.ModelSerializer):
+    firma_inspector_calidad_info = RegistroFirmaSerializer(
+        source="firma_inspector_calidad", read_only=True
+    )
+
+    class Meta:
+        model = MaterialEnvasePrimario
+        fields = "__all__"
+        read_only_fields = ("estado_aprobacion", "codigo_calidad")
 
 
 # =====================================================
@@ -131,6 +162,12 @@ class MateriaPrimaSerializer(serializers.ModelSerializer):
 class ControlCalidadSerializer(serializers.ModelSerializer):
     firma_control_calidad_info = RegistroFirmaSerializer(
         source="firma_control_calidad", read_only=True
+    )
+    inspector_nombre = serializers.CharField(
+        source="inspector.get_full_name", read_only=True
+    )
+    inspector_rut = serializers.CharField(
+        source="inspector.rut", read_only=True
     )
 
     class Meta:
@@ -168,6 +205,27 @@ class PlanillaFabricacionSerializer(serializers.ModelSerializer):
             "estado_aprobacion",
         )
 
+    def validate(self, attrs):
+        fecha_emision = attrs.get(
+            "fecha_emision",
+            getattr(self.instance, "fecha_emision",
+                    None) if self.instance else None,
+        )
+        fecha_vencimiento = attrs.get(
+            "fecha_vencimiento",
+            getattr(self.instance, "fecha_vencimiento",
+                    None) if self.instance else None,
+        )
+        if (
+            fecha_emision
+            and fecha_vencimiento
+            and fecha_vencimiento < fecha_emision
+        ):
+            raise serializers.ValidationError({
+                "fecha_vencimiento": "La fecha de vencimiento no puede ser anterior a la fecha de emisión."
+            })
+        return attrs
+
 
 # =====================================================
 # PLANILLA ENVASE
@@ -193,6 +251,27 @@ class PlanillaEnvaseSerializer(serializers.ModelSerializer):
             "estado_aprobacion",
         )
 
+    def validate(self, attrs):
+        fecha_emision = attrs.get(
+            "fecha_emision",
+            getattr(self.instance, "fecha_emision",
+                    None) if self.instance else None,
+        )
+        fecha_vencimiento = attrs.get(
+            "fecha_vencimiento",
+            getattr(self.instance, "fecha_vencimiento",
+                    None) if self.instance else None,
+        )
+        if (
+            fecha_emision
+            and fecha_vencimiento
+            and fecha_vencimiento < fecha_emision
+        ):
+            raise serializers.ValidationError({
+                "fecha_vencimiento": "La fecha de vencimiento no puede ser anterior a la fecha de emisión."
+            })
+        return attrs
+
 
 # =====================================================
 # PLANILLA ENVASE PRIMARIO
@@ -204,6 +283,9 @@ class PlanillaEnvasePrimarioSerializer(serializers.ModelSerializer):
     )
     firma_jefe_produccion_info = RegistroFirmaSerializer(
         source="firma_jefe_produccion", read_only=True
+    )
+    firma_inspector_calidad_info = RegistroFirmaSerializer(
+        source="firma_inspector_calidad", read_only=True
     )
     firma_quimico_farmaceutico_info = RegistroFirmaSerializer(
         source="firma_quimico_farmaceutico", read_only=True
@@ -220,6 +302,27 @@ class PlanillaEnvasePrimarioSerializer(serializers.ModelSerializer):
             "usuario_ultima_modificacion",
             "estado_aprobacion",
         )
+
+    def validate(self, attrs):
+        fecha_emision = attrs.get(
+            "fecha_emision",
+            getattr(self.instance, "fecha_emision",
+                    None) if self.instance else None,
+        )
+        fecha_vencimiento = attrs.get(
+            "fecha_vencimiento",
+            getattr(self.instance, "fecha_vencimiento",
+                    None) if self.instance else None,
+        )
+        if (
+            fecha_emision
+            and fecha_vencimiento
+            and fecha_vencimiento < fecha_emision
+        ):
+            raise serializers.ValidationError({
+                "fecha_vencimiento": "La fecha de vencimiento no puede ser anterior a la fecha de emisión."
+            })
+        return attrs
 
 
 # =====================================================

@@ -13,6 +13,7 @@ from .models import (
     Producto,
     TipoProducto,
     MateriaPrima,
+    MaterialEnvasePrimario,
     ControlCalidad,
     PlanillaFabricacion,
     PlanillaEnvase,
@@ -28,6 +29,7 @@ from .serializers import (
     ProductoSerializer,
     TipoProductoSerializer,
     MateriaPrimaSerializer,
+    MaterialEnvasePrimarioSerializer,
     ControlCalidadSerializer,
     PlanillaFabricacionSerializer,
     PlanillaEnvaseSerializer,
@@ -76,6 +78,13 @@ class TipoProductoViewSet(viewsets.ModelViewSet):
 class MateriaPrimaViewSet(viewsets.ModelViewSet):
     queryset = MateriaPrima.objects.all()
     serializer_class = MateriaPrimaSerializer
+    # La firma de materia prima viene desde ControlCalidad.firmar
+
+
+class MaterialEnvasePrimarioViewSet(viewsets.ModelViewSet):
+    queryset = MaterialEnvasePrimario.objects.all()
+    serializer_class = MaterialEnvasePrimarioSerializer
+    # La firma de este material también viene desde ControlCalidad.firmar
 
 
 # ===========================================================
@@ -93,11 +102,15 @@ class ControlCalidadViewSet(viewsets.ModelViewSet):
             return ControlCalidad.objects.none()
 
         try:
-            if user.perfilusuario.rol.nombre == "INSPECTOR_CALIDAD":
-                return ControlCalidad.objects.all()
+            rol = user.perfilusuario.rol.nombre
         except PerfilUsuario.DoesNotExist:
-            pass
+            return ControlCalidad.objects.none()
 
+        # Solo los inspectores ven sus propios controles asignados
+        if rol == "INSPECTOR_CALIDAD":
+            return ControlCalidad.objects.filter(inspector=user)
+
+        # Otros roles actualmente no ven nada
         return ControlCalidad.objects.none()
 
     @action(detail=True, methods=["post"])
@@ -115,24 +128,57 @@ class ControlCalidadViewSet(viewsets.ModelViewSet):
         user = authenticate(username=data["rut"], password=data["password"])
 
         if not user:
-            return Response({"error": "Credenciales inválidas"},
-                            status=status.HTTP_401_UNAUTHORIZED)
+            return Response(
+                {"error": "Credenciales inválidas"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
 
-        if not self._tiene_permiso_firma(user):
-            return Response({"error": "No tiene permisos para esta firma"},
-                            status=status.HTTP_403_FORBIDDEN)
+        if not self._tiene_permiso_firma(user, control_calidad):
+            return Response(
+                {"error": "No tiene permisos para firmar este control de calidad"},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         firma_hash = self._generar_hash_firma(user, control_calidad)
 
+        # 1) Crear registro de firma
         registro_firma = RegistroFirma.objects.create(
             usuario=user,
-            control_calidad=control_calidad,
             firma_hash=firma_hash,
             ip_address=self._get_client_ip(request),
             user_agent=request.META.get("HTTP_USER_AGENT", "")
         )
 
-        control_calidad.refresh_from_db()
+        # 2) Actualizar control de calidad
+        control_calidad.firma_control_calidad = registro_firma
+        control_calidad.aprobado = True
+        control_calidad.save(
+            update_fields=["firma_control_calidad", "aprobado"]
+        )
+
+        # 3) Actualizar materia prima asociada (si existe)
+        mp = control_calidad.materia_prima
+        if mp:
+            mp.firma_inspector_calidad = registro_firma
+            mp.control_calidad = True
+            mp.estado_aprobacion = "APROBADO"
+            mp.save(update_fields=[
+                "firma_inspector_calidad",
+                "control_calidad",
+                "estado_aprobacion",
+            ])
+
+        # 4) Actualizar material de envase primario asociado (si existe)
+        mep = control_calidad.material_envase_primario
+        if mep:
+            mep.firma_inspector_calidad = registro_firma
+            mep.control_calidad = True
+            mep.estado_aprobacion = "APROBADO"
+            mep.save(update_fields=[
+                "firma_inspector_calidad",
+                "control_calidad",
+                "estado_aprobacion",
+            ])
 
         return Response({
             "mensaje": "Control de calidad firmado correctamente",
@@ -141,11 +187,22 @@ class ControlCalidadViewSet(viewsets.ModelViewSet):
             "aprobado": control_calidad.aprobado,
         })
 
-    def _tiene_permiso_firma(self, user):
+    def _tiene_permiso_firma(self, user, control_calidad):
+        """
+        Debe:
+        - tener rol INSPECTOR_CALIDAD
+        - ser exactamente el inspector asignado al ControlCalidad
+        """
         try:
-            return user.perfilusuario.rol.nombre == "INSPECTOR_CALIDAD"
+            rol = user.perfilusuario.rol.nombre
         except PerfilUsuario.DoesNotExist:
             return False
+
+        if rol != "INSPECTOR_CALIDAD":
+            return False
+
+        # solo el inspector asignado puede firmar este control
+        return control_calidad.inspector_id == user.id
 
     def _generar_hash_firma(self, user, control_calidad):
         data = f"{user.rut}{control_calidad.id}{datetime.datetime.now().isoformat()}"
@@ -188,12 +245,16 @@ class PlanillaFabricacionViewSet(viewsets.ModelViewSet):
         user = authenticate(username=data["rut"], password=data["password"])
 
         if not user:
-            return Response({"error": "Credenciales inválidas"},
-                            status=status.HTTP_401_UNAUTHORIZED)
+            return Response(
+                {"error": "Credenciales inválidas"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
 
         if not self._tiene_permiso_firma(user):
-            return Response({"error": "No tiene permisos para esta firma"},
-                            status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"error": "No tiene permisos para esta firma"},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         firma_hash = self._generar_hash_firma(user, planilla)
 
@@ -286,12 +347,16 @@ class PlanillaEnvasePrimarioViewSet(viewsets.ModelViewSet):
         user = authenticate(username=data["rut"], password=data["password"])
 
         if not user:
-            return Response({"error": "Credenciales inválidas"},
-                            status=status.HTTP_401_UNAUTHORIZED)
+            return Response(
+                {"error": "Credenciales inválidas"},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
 
         if not self._tiene_permiso_firma(user):
-            return Response({"error": "No tiene permisos para esta firma"},
-                            status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"error": "No tiene permisos para esta firma"},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         firma_hash = self._generar_hash_firma(user, planilla)
 
@@ -320,6 +385,7 @@ class PlanillaEnvasePrimarioViewSet(viewsets.ModelViewSet):
         return rol in {
             "JEFE_SECCION",
             "JEFE_PRODUCCION",
+            "INSPECTOR_CALIDAD",
             "QUIMICO_FARMACEUTICO",
         }
 
@@ -376,5 +442,6 @@ class JarabeViewSet(viewsets.ModelViewSet):
             )
 
         serializer = PlanillaEnvasePrimarioSerializer(
-            jarabe.planilla_envase_primario)
+            jarabe.planilla_envase_primario
+        )
         return Response(serializer.data)
