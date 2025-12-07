@@ -11,15 +11,9 @@ class UsuarioPersonalizadoAdmin(UserAdmin):
     search_fields = ('username', 'rut', 'first_name', 'last_name', 'email')
 
 
-@admin.register(Rol)
-class RolAdmin(admin.ModelAdmin):
-    list_display = ('nombre', 'descripcion')
-    search_fields = ('nombre',)
-
-
 @admin.register(PerfilUsuario)
 class PerfilUsuarioAdmin(admin.ModelAdmin):
-    list_display = ('usuario', 'rol', 'departamento', 'cargo')
+    list_display = ('usuario', 'rol', 'departamento')
     list_filter = ('rol', 'departamento')
     search_fields = ('usuario__username', 'usuario__rut', 'departamento')
 

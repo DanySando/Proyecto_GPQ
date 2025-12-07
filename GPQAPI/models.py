@@ -24,34 +24,29 @@ class UsuarioPersonalizado(AbstractUser):
 
 
 # =======================================================
-# ROLES
-# =======================================================
-class Rol(models.Model):
-    nombre = models.CharField(max_length=50, unique=True)
-    descripcion = models.TextField(blank=True)
-    permisos = models.JSONField(default=list)
-
-    def __str__(self):
-        return self.nombre
-
-
-# =======================================================
-# PERFIL USUARIO
+# PERFIL USUARIO (ROL COMO CHARFIELD)
 # =======================================================
 class PerfilUsuario(models.Model):
+    ROL_CHOICES = [
+        ("JEFE_SECCION", "Jefe de Sección"),
+        ("JEFE_PRODUCCION", "Jefe de Producción"),
+        ("INSPECTOR_CALIDAD", "Inspector de Calidad"),
+        ("QUIMICO_FARMACEUTICO", "Químico Farmacéutico"),
+    ]
+
     usuario = models.OneToOneField(
         UsuarioPersonalizado, on_delete=models.CASCADE
     )
-    rol = models.ForeignKey(Rol, on_delete=models.CASCADE)
+    rol = models.CharField(max_length=30, choices=ROL_CHOICES)
+
     departamento = models.CharField(max_length=100, blank=True)
-    cargo = models.CharField(max_length=100, blank=True)
     numero_licencia = models.CharField(max_length=50, blank=True)
 
     contacto_emergencia_nombre = models.CharField(max_length=100, blank=True)
     contacto_emergencia_telefono = models.CharField(max_length=15, blank=True)
 
     def __str__(self):
-        return f"{self.usuario.get_full_name()} - {self.rol.nombre}"
+        return f"{self.usuario.get_full_name()} - {self.get_rol_display()}"
 
 
 # =======================================================
@@ -67,6 +62,12 @@ class RegistroFirma(models.Model):
     )
     planilla_envase_primario = models.ForeignKey(
         "PlanillaEnvasePrimario", null=True, blank=True, on_delete=models.CASCADE
+    )
+    planilla_envase_secundario_empaque = models.ForeignKey(
+        "PlanillaEnvaseSecundarioEmpaque",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
     )
 
     tipo_firma = models.CharField(max_length=40)
@@ -109,12 +110,11 @@ class RegistroFirma(models.Model):
     def save(self, *args, **kwargs):
         es_nueva = self.pk is None
 
-        # 1) Detectar tipo_firma según rol del usuario
+        # 1) Detectar tipo_firma según rol del usuario (rol como CharField)
         try:
-            rol = self.usuario.perfilusuario.rol.nombre.strip().upper()
+            rol = self.usuario.perfilusuario.rol.strip().upper()
         except Exception:
-            # si no tiene perfil, usamos lo que ya venga en tipo_firma
-            rol = self.tipo_firma or ""
+            rol = (self.tipo_firma or "").strip().upper()
 
         normalizado = (
             rol.replace(" ", "_")
@@ -140,38 +140,68 @@ class RegistroFirma(models.Model):
         super().save(*args, **kwargs)
 
         # 3) Acciones automáticas solo en nueva firma
-        if not es_nueva:
-            return
+        if es_nueva:
+            print(
+                f"DEBUG: Nueva firma creada, tipo: {self.tipo_firma}, id: {self.id}"
+            )
 
-        # PLANILLA FABRICACIÓN
-        if self.planilla_fabricacion:
-            pf = self.planilla_fabricacion
-            asignacion = {
-                "JEFE_SECCION": "firma_jefe_seccion",
-                "JEFE_PRODUCCION": "firma_jefe_produccion",
-                "INSPECTOR_CALIDAD": "firma_inspector_calidad",
-                "QUIMICO_FARMACEUTICO": "firma_quimico_farmaceutico",
-            }
-            campo = asignacion.get(self.tipo_firma)
-            if campo:
-                setattr(pf, campo, self)
-                pf.save(update_fields=[campo])
-                pf.actualizar_estado_aprobacion()
+            # PLANILLA FABRICACIÓN
+            if self.planilla_fabricacion:
+                pf = self.planilla_fabricacion
+                print(f"DEBUG: Asociando firma a planilla fabricación {pf.id}")
+                asignacion = {
+                    "JEFE_SECCION": "firma_jefe_seccion",
+                    "JEFE_PRODUCCION": "firma_jefe_produccion",
+                    "QUIMICO_FARMACEUTICO": "firma_quimico_farmaceutico",
+                }
+                campo = asignacion.get(self.tipo_firma)
+                if campo:
+                    setattr(pf, campo, self)
+                    pf.save(update_fields=[campo])
+                    pf.actualizar_estado_aprobacion()
+                    print(
+                        f"DEBUG: Firma asignada a {campo} en planilla fabricación"
+                    )
 
-        # PLANILLA ENVASE PRIMARIO
-        if self.planilla_envase_primario:
-            pep = self.planilla_envase_primario
-            asignacion2 = {
-                "JEFE_SECCION": "firma_jefe_seccion",
-                "JEFE_PRODUCCION": "firma_jefe_produccion",
-                "INSPECTOR_CALIDAD": "firma_inspector_calidad",
-                "QUIMICO_FARMACEUTICO": "firma_quimico_farmaceutico",
-            }
-            campo = asignacion2.get(self.tipo_firma)
-            if campo:
-                setattr(pep, campo, self)
-                pep.save(update_fields=[campo])
-                pep.actualizar_estado_aprobacion()
+            # PLANILLA ENVASE PRIMARIO
+            if self.planilla_envase_primario:
+                pep = self.planilla_envase_primario
+                print(
+                    f"DEBUG: Asociando firma a planilla envase primario {pep.id}"
+                )
+                asignacion2 = {
+                    "JEFE_SECCION": "firma_jefe_seccion",
+                    "JEFE_PRODUCCION": "firma_jefe_produccion",
+                    "QUIMICO_FARMACEUTICO": "firma_quimico_farmaceutico",
+                }
+                campo = asignacion2.get(self.tipo_firma)
+                if campo:
+                    setattr(pep, campo, self)
+                    pep.save(update_fields=[campo])
+                    pep.actualizar_estado_aprobacion()
+                    print(
+                        f"DEBUG: Firma asignada a {campo} en planilla envase primario"
+                    )
+
+            # PLANILLA ENVASE SECUNDARIO Y EMPAQUE
+            if self.planilla_envase_secundario_empaque:
+                pes = self.planilla_envase_secundario_empaque
+                print(
+                    f"DEBUG: Asociando firma a planilla envase secundario/empaque {pes.id}"
+                )
+                asignacion3 = {
+                    "JEFE_SECCION": "firma_jefe_seccion",
+                    "JEFE_PRODUCCION": "firma_jefe_produccion",
+                    "QUIMICO_FARMACEUTICO": "firma_quimico_farmaceutico",
+                }
+                campo = asignacion3.get(self.tipo_firma)
+                if campo:
+                    setattr(pes, campo, self)
+                    pes.save(update_fields=[campo])
+                    pes.actualizar_estado_aprobacion()
+                    print(
+                        f"DEBUG: Firma asignada a {campo} en planilla envase secundario/empaque"
+                    )
 
     def __str__(self):
         return f"{self.usuario.rut} - {self.tipo_firma}"
@@ -239,6 +269,7 @@ class MateriaPrima(models.Model):
     nombre = models.CharField(max_length=255)
     cantidad = models.DecimalField(max_digits=10, decimal_places=2)
     batch = models.CharField(max_length=100)
+
     control_calidad = models.BooleanField(default=False)
 
     firma_inspector_calidad = models.ForeignKey(
@@ -251,14 +282,22 @@ class MateriaPrima(models.Model):
     )
 
     def actualizar_estado_aprobacion(self):
+        print(f"DEBUG: Actualizando estado de materia prima {self.id}")
+        print(f"DEBUG: Firma inspector: {self.firma_inspector_calidad}")
+
         if self.firma_inspector_calidad:
             self.estado_aprobacion = "APROBADO"
             self.control_calidad = True
+            print(f"DEBUG: Materia prima {self.id} APROBADA")
         else:
             self.estado_aprobacion = "PENDIENTE"
             self.control_calidad = False
+            print(f"DEBUG: Materia prima {self.id} PENDIENTE")
 
-        super().save(update_fields=["estado_aprobacion", "control_calidad"])
+        self.save()
+        print(
+            f"DEBUG: Materia prima {self.id} guardada, estado: {self.estado_aprobacion}"
+        )
 
     def __str__(self):
         return f"{self.nombre} - {self.batch}"
@@ -277,17 +316,11 @@ class MaterialEnvasePrimario(models.Model):
     nombre = models.CharField(max_length=255)
     tipo_envase = models.CharField(max_length=100)
 
-    # código de calidad automático
     codigo_calidad = models.CharField(
         max_length=50, unique=True, blank=True
     )
 
     control_calidad = models.BooleanField(default=False)
-
-    firma_inspector_calidad = models.ForeignKey(
-        "RegistroFirma", null=True, blank=True, on_delete=models.SET_NULL,
-        related_name="firmas_material_envase_primario"
-    )
 
     estado_aprobacion = models.CharField(
         max_length=20, choices=ESTADOS_APROBACION, default="PENDIENTE"
@@ -303,20 +336,207 @@ class MaterialEnvasePrimario(models.Model):
                 except Exception:
                     next_num = 1
             self.codigo_calidad = f"MEP-{next_num:04d}"
+
         super().save(*args, **kwargs)
 
-    def actualizar_estado_aprobacion(self):
-        if self.firma_inspector_calidad:
+    def actualizar_estado_aprobacion(self, control_calidad):
+        print(
+            f"DEBUG: Actualizando estado de material envase primario {self.id}"
+        )
+        print(
+            f"DEBUG: Control calidad asociado: {control_calidad.id if control_calidad else 'None'}"
+        )
+        print(
+            f"DEBUG: Control calidad aprobado: {control_calidad.aprobado if control_calidad else 'False'}"
+        )
+        print(
+            f"DEBUG: Control calidad tiene firma: {control_calidad.firma_control_calidad if control_calidad else 'False'}"
+        )
+
+        tiene_firma = (
+            control_calidad and
+            control_calidad.aprobado and
+            control_calidad.firma_control_calidad is not None
+        )
+
+        if tiene_firma:
             self.estado_aprobacion = "APROBADO"
             self.control_calidad = True
+            print(
+                f"DEBUG: Material envase primario {self.id} APROBADO (tiene firma en control calidad)"
+            )
         else:
             self.estado_aprobacion = "PENDIENTE"
             self.control_calidad = False
+            print(
+                f"DEBUG: Material envase primario {self.id} PENDIENTE (sin firma)"
+            )
 
-        super().save(update_fields=["estado_aprobacion", "control_calidad"])
+        self.save()
+        print(
+            f"DEBUG: Material envase primario {self.id} guardado, estado: {self.estado_aprobacion}, control_calidad: {self.control_calidad}"
+        )
 
     def __str__(self):
         return f"{self.codigo} - {self.nombre}"
+
+
+# =======================================================
+# MATERIAL ENVASE SECUNDARIO Y EMPAQUE
+# =======================================================
+class MaterialEnvaseSecundarioEmpaque(models.Model):
+    ESTADOS_APROBACION = [
+        ("PENDIENTE", "Pendiente"),
+        ("APROBADO", "Aprobado"),
+    ]
+
+    codigo = models.CharField(max_length=50, unique=True)
+    nombre = models.CharField(max_length=255)
+    tipo_envase = models.CharField(max_length=100)
+
+    codigo_calidad = models.CharField(
+        max_length=50, unique=True, blank=True
+    )
+
+    control_calidad = models.BooleanField(default=False)
+
+    estado_aprobacion = models.CharField(
+        max_length=20, choices=ESTADOS_APROBACION, default="PENDIENTE"
+    )
+
+    def save(self, *args, **kwargs):
+        if not self.codigo_calidad:
+            last = MaterialEnvaseSecundarioEmpaque.objects.order_by(
+                "-id").first()
+            next_num = 1
+            if last and last.codigo_calidad:
+                try:
+                    next_num = int(last.codigo_calidad.split("-")[-1]) + 1
+                except Exception:
+                    next_num = 1
+            self.codigo_calidad = f"MES-{next_num:04d}"
+
+        super().save(*args, **kwargs)
+
+    def actualizar_estado_aprobacion(self, control_calidad):
+        print(
+            f"DEBUG: Actualizando estado de material envase secundario {self.id}"
+        )
+        print(
+            f"DEBUG: Control calidad asociado: {control_calidad.id if control_calidad else 'None'}"
+        )
+        print(
+            f"DEBUG: Control calidad aprobado: {control_calidad.aprobado if control_calidad else 'False'}"
+        )
+        print(
+            f"DEBUG: Control calidad tiene firma: {control_calidad.firma_control_calidad if control_calidad else 'False'}"
+        )
+
+        tiene_firma = (
+            control_calidad and
+            control_calidad.aprobado and
+            control_calidad.firma_control_calidad is not None
+        )
+
+        if tiene_firma:
+            self.estado_aprobacion = "APROBADO"
+            self.control_calidad = True
+            print(
+                f"DEBUG: Material envase secundario {self.id} APROBADO (tiene firma en control calidad)"
+            )
+        else:
+            self.estado_aprobacion = "PENDIENTE"
+            self.control_calidad = False
+            print(
+                f"DEBUG: Material envase secundario {self.id} PENDIENTE (sin firma)"
+            )
+
+        self.save()
+        print(
+            f"DEBUG: Material envase secundario {self.id} guardado, estado: {self.estado_aprobacion}, control_calidad: {self.control_calidad}"
+        )
+
+    def __str__(self):
+        return f"{self.codigo} - {self.nombre}"
+
+
+# =======================================================
+# BODEGAS Y STOCK
+# =======================================================
+class Bodega(models.Model):
+    TIPO_CHOICES = [
+        ("MP", "Materia Prima"),
+        ("EP", "Envase Primario"),
+        ("ES", "Envase Secundario/Empaque"),
+        ("PT", "Producto Terminado"),
+    ]
+
+    nombre = models.CharField(max_length=255, unique=True)
+    tipo = models.CharField(max_length=2, choices=TIPO_CHOICES)
+    ubicacion = models.CharField(max_length=255, blank=True)
+    es_principal = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"{self.nombre} ({self.get_tipo_display()})"
+
+
+class StockMateriaPrima(models.Model):
+    bodega = models.ForeignKey(
+        Bodega, on_delete=models.CASCADE, related_name="stocks_materia_prima"
+    )
+    materia_prima = models.ForeignKey(
+        MateriaPrima, on_delete=models.CASCADE, related_name="stocks"
+    )
+    cantidad_disponible = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0
+    )
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("bodega", "materia_prima")
+
+    def __str__(self):
+        return f"Stock MP {self.materia_prima} en {self.bodega}: {self.cantidad_disponible}"
+
+
+class StockMaterialEnvasePrimario(models.Model):
+    bodega = models.ForeignKey(
+        Bodega, on_delete=models.CASCADE, related_name="stocks_envase_primario"
+    )
+    material_envase_primario = models.ForeignKey(
+        MaterialEnvasePrimario, on_delete=models.CASCADE, related_name="stocks"
+    )
+    cantidad_disponible = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0
+    )
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("bodega", "material_envase_primario")
+
+    def __str__(self):
+        return f"Stock EP {self.material_envase_primario} en {self.bodega}: {self.cantidad_disponible}"
+
+
+class StockMaterialEnvaseSecundarioEmpaque(models.Model):
+    bodega = models.ForeignKey(
+        Bodega, on_delete=models.CASCADE, related_name="stocks_envase_secundario"
+    )
+    material_envase_secundario_empaque = models.ForeignKey(
+        MaterialEnvaseSecundarioEmpaque,
+        on_delete=models.CASCADE,
+        related_name="stocks",
+    )
+    cantidad_disponible = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0
+    )
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("bodega", "material_envase_secundario_empaque")
+
+    def __str__(self):
+        return f"Stock ES {self.material_envase_secundario_empaque} en {self.bodega}: {self.cantidad_disponible}"
 
 
 # =======================================================
@@ -331,28 +551,36 @@ class ControlCalidad(models.Model):
     fecha_verificacion = models.DateField()
     aprobado = models.BooleanField(default=False)
 
-    producto = models.ForeignKey(Producto, on_delete=models.CASCADE)
+    producto = models.ForeignKey(
+        Producto,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
 
-    # Materia prima asociada al control
     materia_prima = models.ForeignKey(
         MateriaPrima, null=True, blank=True,
         on_delete=models.CASCADE, related_name="controles_calidad"
     )
 
-    # Material de envase primario asociado al control
     material_envase_primario = models.ForeignKey(
         MaterialEnvasePrimario, null=True, blank=True,
-        on_delete=models.CASCADE, related_name="controles_calidad_envase_primario"
+        on_delete=models.CASCADE,
+        related_name="controles_calidad_envase_primario"
     )
 
-    # Inspector asignado obligatoriamente
+    material_envase_secundario_empaque = models.ForeignKey(
+        MaterialEnvaseSecundarioEmpaque, null=True, blank=True,
+        on_delete=models.CASCADE,
+        related_name="controles_calidad_envase_secundario"
+    )
+
     inspector = models.ForeignKey(
         UsuarioPersonalizado,
         on_delete=models.PROTECT,
         related_name="controles_a_firmar"
     )
 
-    # Firma registrada cuando el inspector firma el control
     firma_control_calidad = models.ForeignKey(
         "RegistroFirma", null=True, blank=True, on_delete=models.SET_NULL,
         related_name="firmas_cc"
@@ -387,6 +615,11 @@ class PlanillaFabricacion(ModeloAuditoria):
         ("APROBADO", "Aprobado"),
     ]
 
+    TIPO_MOVIMIENTO_CHOICES = [
+        ("PRODUCCION", "Producción"),
+        ("PEDIDO_BODEGA", "Pedido a bodega"),
+    ]
+
     producto = models.ForeignKey(Producto, on_delete=models.CASCADE)
     tipo_producto = models.ForeignKey(TipoProducto, on_delete=models.CASCADE)
 
@@ -396,6 +629,28 @@ class PlanillaFabricacion(ModeloAuditoria):
     fecha_emision = models.DateField()
     fecha_vencimiento = models.DateField()
 
+    # NUEVOS CAMPOS
+    batch_standart = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        verbose_name="Batch Standart",
+    )
+    cont_por_100ml = models.DecimalField(
+        "Cont. por 100 mL",
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+
+    # PRODUCCIÓN vs PEDIDO A BODEGA
+    tipo_movimiento = models.CharField(
+        max_length=20,
+        choices=TIPO_MOVIMIENTO_CHOICES,
+        default="PRODUCCION",
+    )
+
     control_calidad = models.ForeignKey(
         ControlCalidad, on_delete=models.CASCADE,
         related_name="planillas_fabricacion"
@@ -403,7 +658,12 @@ class PlanillaFabricacion(ModeloAuditoria):
 
     rendimiento_teorico = models.DecimalField(max_digits=10, decimal_places=2)
     periodo_eficacia = models.IntegerField()
+    # cantidad de estuches producidos (columna de la planilla)
     cantidad_estuches = models.DecimalField(max_digits=10, decimal_places=2)
+    # cantidad entregada (para pedidos a bodega / control stock)
+    cantidad_entregada = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0
+    )
 
     materia_prima = models.ForeignKey(MateriaPrima, on_delete=models.CASCADE)
 
@@ -415,10 +675,7 @@ class PlanillaFabricacion(ModeloAuditoria):
         "RegistroFirma", null=True, blank=True, on_delete=models.SET_NULL,
         related_name="firma_jp_fabricacion"
     )
-    firma_inspector_calidad = models.ForeignKey(
-        "RegistroFirma", null=True, blank=True, on_delete=models.SET_NULL,
-        related_name="firma_ic_fabricacion"
-    )
+    # OJO: se elimina firma_inspector_calidad de la planilla
     firma_quimico_farmaceutico = models.ForeignKey(
         "RegistroFirma", null=True, blank=True, on_delete=models.SET_NULL,
         related_name="firma_qf_fabricacion"
@@ -447,11 +704,10 @@ class PlanillaFabricacion(ModeloAuditoria):
         firmas = [
             self.firma_jefe_seccion,
             self.firma_jefe_produccion,
-            self.firma_inspector_calidad,
             self.firma_quimico_farmaceutico,
         ]
         self.estado_aprobacion = "APROBADO" if all(firmas) else "EN_PROCESO"
-        super().save(update_fields=["estado_aprobacion"])
+        self.save(update_fields=["estado_aprobacion"])
 
     def __str__(self):
         return f"{self.serie}-{self.numero_planilla}"
@@ -505,7 +761,7 @@ class PlanillaEnvase(ModeloAuditoria):
             self.firma_jefe_produccion,
         ]
         self.estado_aprobacion = "APROBADO" if all(firmas) else "EN_PROCESO"
-        super().save(update_fields=["estado_aprobacion"])
+        self.save(update_fields=["estado_aprobacion"])
 
     def __str__(self):
         return f"Envase {self.producto.nombre}"
@@ -520,14 +776,35 @@ class PlanillaEnvasePrimario(ModeloAuditoria):
         ("APROBADO", "Aprobado"),
     ]
 
+    TIPO_MOVIMIENTO_CHOICES = [
+        ("PRODUCCION", "Producción"),
+        ("PEDIDO_BODEGA", "Pedido a bodega"),
+    ]
+
     producto = models.ForeignKey(Producto, on_delete=models.CASCADE)
     tipo_producto = models.ForeignKey(TipoProducto, on_delete=models.CASCADE)
 
-    serie = models.CharField(max_length=50)
+    serie = models.CharField(maxlength=50) if False else models.CharField(
+        max_length=50)  # para evitar errores de copia
     numero_planilla = models.CharField(max_length=50)
 
     fecha_emision = models.DateField()
     fecha_vencimiento = models.DateField()
+
+    # NUEVO CAMPO
+    batch_standart = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        verbose_name="Batch Standart",
+    )
+
+    # PRODUCCIÓN vs PEDIDO A BODEGA
+    tipo_movimiento = models.CharField(
+        max_length=20,
+        choices=TIPO_MOVIMIENTO_CHOICES,
+        default="PRODUCCION",
+    )
 
     control_calidad = models.ForeignKey(
         ControlCalidad, on_delete=models.CASCADE
@@ -536,6 +813,10 @@ class PlanillaEnvasePrimario(ModeloAuditoria):
     rendimiento_teorico = models.DecimalField(max_digits=10, decimal_places=2)
     cantidad_estuches = models.DecimalField(max_digits=10, decimal_places=2)
     periodo_eficacia = models.IntegerField()
+    # cantidad entregada (para pedidos a bodega / control stock)
+    cantidad_entregada = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0
+    )
 
     sala_pesaje = models.CharField(max_length=100, blank=True)
     balanza_numero = models.CharField(max_length=100, blank=True)
@@ -552,10 +833,7 @@ class PlanillaEnvasePrimario(ModeloAuditoria):
         "RegistroFirma", null=True, blank=True, on_delete=models.SET_NULL,
         related_name="firma_jp_envase_primario"
     )
-    firma_inspector_calidad = models.ForeignKey(
-        "RegistroFirma", null=True, blank=True, on_delete=models.SET_NULL,
-        related_name="firma_ic_envase_primario"
-    )
+    # OJO: se elimina firma_inspector_calidad en envase primario
     firma_quimico_farmaceutico = models.ForeignKey(
         "RegistroFirma", null=True, blank=True, on_delete=models.SET_NULL,
         related_name="firma_qf_envase_primario"
@@ -579,14 +857,104 @@ class PlanillaEnvasePrimario(ModeloAuditoria):
         firmas = [
             self.firma_jefe_seccion,
             self.firma_jefe_produccion,
-            self.firma_inspector_calidad,
             self.firma_quimico_farmaceutico,
         ]
         self.estado_aprobacion = "APROBADO" if all(firmas) else "EN_PROCESO"
-        super().save(update_fields=["estado_aprobacion"])
+        self.save(update_fields=["estado_aprobacion"])
 
     def __str__(self):
         return f"EnvPrim {self.serie}-{self.numero_planilla}"
+
+
+# =======================================================
+# PLANILLA ENVASE SECUNDARIO Y EMPAQUE
+# =======================================================
+class PlanillaEnvaseSecundarioEmpaque(ModeloAuditoria):
+    ESTADOS_APROBACION = [
+        ("EN_PROCESO", "En proceso"),
+        ("APROBADO", "Aprobado"),
+    ]
+
+    TIPO_MOVIMIENTO_CHOICES = [
+        ("PRODUCCION", "Producción"),
+        ("PEDIDO_BODEGA", "Pedido a bodega"),
+    ]
+
+    producto = models.ForeignKey(Producto, on_delete=models.CASCADE)
+    tipo_producto = models.ForeignKey(TipoProducto, on_delete=models.CASCADE)
+
+    serie = models.CharField(max_length=50)
+    numero_planilla = models.CharField(max_length=50)
+
+    fecha_emision = models.DateField()
+    fecha_vencimiento = models.DateField()
+
+    batch_standart = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        verbose_name="Batch Standart",
+    )
+
+    tipo_movimiento = models.CharField(
+        max_length=20,
+        choices=TIPO_MOVIMIENTO_CHOICES,
+        default="PRODUCCION",
+    )
+
+    control_calidad = models.ForeignKey(
+        ControlCalidad, on_delete=models.CASCADE
+    )
+
+    rendimiento_teorico = models.DecimalField(max_digits=10, decimal_places=2)
+    periodo_eficacia = models.IntegerField()
+    cantidad_estuches = models.DecimalField(max_digits=10, decimal_places=2)
+    cantidad_entregada = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0
+    )
+
+    material_envase_secundario_empaque = models.ForeignKey(
+        MaterialEnvaseSecundarioEmpaque, on_delete=models.CASCADE
+    )
+
+    firma_jefe_seccion = models.ForeignKey(
+        "RegistroFirma", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="firma_js_envase_secundario"
+    )
+    firma_jefe_produccion = models.ForeignKey(
+        "RegistroFirma", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="firma_jp_envase_secundario"
+    )
+    firma_quimico_farmaceutico = models.ForeignKey(
+        "RegistroFirma", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="firma_qf_envase_secundario"
+    )
+
+    estado_aprobacion = models.CharField(
+        max_length=20, choices=ESTADOS_APROBACION, default="EN_PROCESO"
+    )
+
+    def clean(self):
+        if (
+            self.fecha_emision
+            and self.fecha_vencimiento
+            and self.fecha_vencimiento < self.fecha_emision
+        ):
+            raise ValidationError({
+                "fecha_vencimiento": "La fecha de vencimiento no puede ser anterior a la fecha de emisión."
+            })
+
+    def actualizar_estado_aprobacion(self):
+        firmas = [
+            self.firma_jefe_seccion,
+            self.firma_jefe_produccion,
+            self.firma_quimico_farmaceutico,
+        ]
+        self.estado_aprobacion = "APROBADO" if all(firmas) else "EN_PROCESO"
+        self.save(update_fields=["estado_aprobacion"])
+
+    def __str__(self):
+        return f"EnvSec {self.serie}-{self.numero_planilla}"
 
 
 # =======================================================
